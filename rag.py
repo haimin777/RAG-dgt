@@ -7,7 +7,6 @@ from llama_index.core import (
     VectorStoreIndex,
     load_index_from_storage,
 )
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.llms.ollama import Ollama
 from dotenv import load_dotenv
@@ -17,19 +16,14 @@ load_dotenv()
 
 def configure_llm() -> None:
     # ================== EMBEDDINGS ==================
-    embeddings_provider = os.getenv("EMBEDDINGS_PROVIDER", "openai").lower()
-    if embeddings_provider == "openai":
-        openai_api_key = os.getenv("OPENAI_API_KEY")
-        if not openai_api_key:
-            raise RuntimeError("Missing OPENAI_API_KEY for OpenAI embeddings.")
-        embed_model = os.getenv("EMBEDDINGS_MODEL", "text-embedding-3-small")
-        Settings.embed_model = OpenAIEmbedding(
-            model=embed_model,
-            api_key=openai_api_key,
-        )
-    else:
-        # Hugging Face local fallback
-        Settings.embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-m3")
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    if not openai_api_key:
+        raise RuntimeError("Missing OPENAI_API_KEY for OpenAI embeddings.")
+    embed_model = os.getenv("EMBEDDINGS_MODEL", "text-embedding-3-small")
+    Settings.embed_model = OpenAIEmbedding(
+        model=embed_model,
+        api_key=openai_api_key,
+    )
 
     llm_provider = os.getenv("LLM_PROVIDER", "ollama").lower()
     if llm_provider == "grok":
