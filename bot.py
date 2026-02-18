@@ -42,20 +42,20 @@ def format_result(data: dict) -> str:
     options = data.get("options", [])
     if options:
         lines.append("")
-        lines.extend(options)
+        lines.extend([opt for opt in options if isinstance(opt, str)])
 
     correct = data.get("correct")
     if correct:
         lines.append("")
-        lines.append(f"Correct answer: {correct}")
+        lines.append(f"Correct answer: {str(correct)}")
 
-    explanation = data.get("explanation", "").strip()
+    explanation = (data.get("explanation") or "").strip()
     if explanation:
         lines.append("")
         lines.append("Explanation:")
         lines.append(explanation)
 
-    sign_description = data.get("sign_description", "").strip()
+    sign_description = (data.get("sign_description") or "").strip()
     if sign_description:
         lines.append("")
         lines.append(f"Sign: {sign_description}")
