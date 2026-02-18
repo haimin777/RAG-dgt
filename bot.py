@@ -5,6 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 import asyncio
 import logging
+import time
 from telegram import Update
 from telegram.error import RetryAfter
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
@@ -104,7 +105,9 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             query_engine = await asyncio.wait_for(asyncio.to_thread(get_query_engine), timeout=90)
 
         logger.info("Parsing screenshot")
+        t_parse_start = time.perf_counter()
         data = await asyncio.wait_for(asyncio.to_thread(parse_screenshot, save_path), timeout=120)
+        t_parse = time.perf_counter() - t_parse_start
         parsed_text = format_result(data)
 
         if "error" in data:
@@ -134,9 +137,11 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         query = "\n".join(prompt_lines).strip()
         logger.info("Querying RAG")
+        t_rag_start = time.perf_counter()
         response = await asyncio.wait_for(asyncio.to_thread(query_engine.query, query), timeout=120)
+        t_rag = time.perf_counter() - t_rag_start
 
-        output_text = f"{parsed_text}\n\n---\n\nRAG Answer:\n{response}"
+        output_text = f"{parsed_text}\n\n---\n\nRAG Answer:\n{response}\n\nTiming: parse={t_parse:.2f}s rag={t_rag:.2f}s"
 
         max_len = 3500
         for i in range(0, len(output_text), max_len):

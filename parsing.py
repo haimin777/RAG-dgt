@@ -1,6 +1,7 @@
 import os
 import base64
 import json
+import time
 from pathlib import Path
 from openai import OpenAI
 from PIL import Image  # optional: to check/resize images
@@ -39,10 +40,14 @@ def encode_image(image_path: str) -> str:
         return base64.b64encode(image_file.read()).decode("utf-8")
 
 def parse_screenshot(image_path: str):
+    t0 = time.perf_counter()
     print(f"Processing: {image_path}")
     
+    t_encode_start = time.perf_counter()
     base64_image = encode_image(image_path)
+    t_encode = time.perf_counter() - t_encode_start
     
+    t_api_start = time.perf_counter()
     response = client.chat.completions.create(
         model=MODEL,
         messages=[{
@@ -61,10 +66,12 @@ def parse_screenshot(image_path: str):
         max_tokens=1200,
         temperature=0.0   # máximo precisión y consistencia
     )
+    t_api = time.perf_counter() - t_api_start
     
     raw_text = response.choices[0].message.content.strip()
     
     # Intentar extraer JSON (Grok suele devolverlo limpio)
+    t_parse_start = time.perf_counter()
     try:
         # Si viene con ```json ... ``` lo limpiamos
         if "```json" in raw_text:
@@ -75,7 +82,9 @@ def parse_screenshot(image_path: str):
         data = json.loads(raw_text)
     except Exception:
         data = {"error": "Failed to parse JSON", "raw": raw_text}
+    t_parse = time.perf_counter() - t_parse_start
     
+    t_save_start = time.perf_counter()
     # Guardar JSON
     output_path = Path(OUTPUT_FOLDER) / f"{Path(image_path).stem}.json"
     with open(output_path, "w", encoding="utf-8") as f:
@@ -91,8 +100,13 @@ def parse_screenshot(image_path: str):
         f.write(f"\nExplanation:\n{data.get('explanation', '')}\n")
         if data.get("sign_description"):
             f.write(f"\nSign: {data['sign_description']}\n")
+    t_save = time.perf_counter() - t_save_start
     
-    print(f"Saved: {output_path.name} and .txt\n")
+    total = time.perf_counter() - t0
+    print(
+        f"Saved: {output_path.name} and .txt | "
+        f"encode={t_encode:.2f}s api={t_api:.2f}s parse={t_parse:.2f}s save={t_save:.2f}s total={total:.2f}s\n"
+    )
     return data
 
 # ================== RUN ON FOLDER ==================
