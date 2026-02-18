@@ -1,7 +1,8 @@
+python-dotenv
+python-telegram-bot[webhooks]
 llama-index 
 llama-index-llms-ollama
 llama-index-llms-openai-like
 llama-index-embeddings-huggingface 
 llama-index-embeddings-openai
-python-dotenv
-python-telegram-bot[webhooks]
+
