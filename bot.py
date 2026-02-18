@@ -120,7 +120,6 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         question = data.get("question", "").strip()
         options = data.get("options", [])
-    explanation = data.get("explanation", "").strip()
 
         prompt_lines = [
             "Analyze the driver's theory test question (Spanish Permiso B / DGT).",
@@ -131,7 +130,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if options:
             prompt_lines.append("")
             prompt_lines.extend(options)
-    # Intentionally omit app explanation to keep the prompt short and faster.
+        # Intentionally omit app explanation to keep the prompt short and faster.
 
         query = "\n".join(prompt_lines).strip()
         logger.info("Querying RAG")
