@@ -3,7 +3,5 @@ llama-index-llms-ollama
 llama-index-llms-openai-like
 llama-index-embeddings-huggingface 
 llama-index-embeddings-openai
-chromadb 
-gradio
 python-dotenv
 python-telegram-bot[webhooks]
