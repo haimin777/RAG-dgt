@@ -65,4 +65,5 @@ def get_query_engine(persist_dir: str = "./storage", data_dir: str = "driving_da
         storage_context = StorageContext.from_defaults(persist_dir=persist_dir)
         index = load_index_from_storage(storage_context)
 
-    return index.as_query_engine(similarity_top_k=6)
+    top_k = int(os.getenv("RAG_TOP_K", "4"))
+    return index.as_query_engine(similarity_top_k=top_k)

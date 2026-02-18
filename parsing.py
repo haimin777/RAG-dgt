@@ -2,6 +2,7 @@ import os
 import base64
 import json
 import time
+import io
 from pathlib import Path
 from openai import OpenAI
 from PIL import Image  # optional: to check/resize images
@@ -35,9 +36,20 @@ Analyze the screenshot and return ONLY valid JSON:
   "sign_description": "description of any road sign in English"
 }
 """
+PARSE_MAX_DIM = int(os.getenv("PARSE_MAX_DIM", "1280"))  # max width/height
+PARSE_JPEG_QUALITY = int(os.getenv("PARSE_JPEG_QUALITY", "75"))
+PARSE_DETAIL = os.getenv("PARSE_DETAIL", "low").lower()
+
+
 def encode_image(image_path: str) -> str:
-    with open(image_path, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode("utf-8")
+    # Resize/compress to reduce upload size and latency
+    with Image.open(image_path) as img:
+        img = img.convert("RGB")
+        if PARSE_MAX_DIM > 0:
+            img.thumbnail((PARSE_MAX_DIM, PARSE_MAX_DIM))
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG", quality=PARSE_JPEG_QUALITY, optimize=True)
+        return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 def parse_screenshot(image_path: str):
     t0 = time.perf_counter()
@@ -58,7 +70,7 @@ def parse_screenshot(image_path: str):
                     "type": "image_url",
                     "image_url": {
                         "url": f"data:image/jpeg;base64,{base64_image}",
-                        "detail": "high"
+                        "detail": PARSE_DETAIL
                     }
                 }
             ]
