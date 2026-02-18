@@ -1,5 +1,5 @@
 import os
-import tempfile
+import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -28,6 +28,8 @@ BOT_MODE = os.getenv("BOT_MODE", "polling").lower()
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
 WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/webhook").strip() or "/webhook"
 PORT = int(os.getenv("PORT", "8080"))
+SCREENSHOTS_DIR = os.getenv("SCREENSHOTS_DIR", "./screenshots")
+os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 
 
 def format_result(data: dict) -> str:
@@ -88,10 +90,10 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     suffix = Path(tg_file.file_path or "").suffix or ".jpg"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        await tg_file.download_to_drive(custom_path=tmp.name)
-        temp_path = tmp.name
-    logger.info("Downloaded image to %s", temp_path)
+    filename = f"{uuid.uuid4().hex}{suffix}"
+    save_path = str(Path(SCREENSHOTS_DIR) / filename)
+    await tg_file.download_to_drive(custom_path=save_path)
+    logger.info("Downloaded image to %s", save_path)
 
     await safe_reply(message, "Processing the screenshot. This can take a moment...")
 
@@ -102,7 +104,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             query_engine = await asyncio.wait_for(asyncio.to_thread(get_query_engine), timeout=90)
 
         logger.info("Parsing screenshot")
-        data = await asyncio.wait_for(asyncio.to_thread(parse_screenshot, temp_path), timeout=120)
+        data = await asyncio.wait_for(asyncio.to_thread(parse_screenshot, save_path), timeout=120)
         parsed_text = format_result(data)
 
         if "error" in data:
