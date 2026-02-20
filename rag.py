@@ -1,4 +1,5 @@
 import os
+import logging
 
 from llama_index.core import (
     Settings,
@@ -68,6 +69,7 @@ def configure_llm() -> None:
 
 _index = None
 _retriever = None
+logger = logging.getLogger("rag")
 
 
 def _load_index(persist_dir: str = "./storage", data_dir: str = "driving_data"):
@@ -93,7 +95,7 @@ def _get_retriever(persist_dir: str = "./storage", data_dir: str = "driving_data
     if _retriever is None:
         if _index is None:
             _index = _load_index(persist_dir=persist_dir, data_dir=data_dir)
-        top_k = int(os.getenv("RAG_TOP_K", "1"))
+        top_k = int(os.getenv("RAG_TOP_K", "4"))
         _retriever = _index.as_retriever(similarity_top_k=top_k)
     return _retriever
 
@@ -102,8 +104,11 @@ def answer_query(query: str, persist_dir: str = "./storage", data_dir: str = "dr
     retriever = _get_retriever(persist_dir=persist_dir, data_dir=data_dir)
     nodes = retriever.retrieve(query)
 
-    min_score = float(os.getenv("RAG_MIN_SCORE", "0.3"))
+    min_score = float(os.getenv("RAG_MIN_SCORE", "0.0"))
     filtered = [n for n in nodes if (n.score is None or n.score >= min_score)]
+    if os.getenv("RAG_LOG_SCORES", "0") == "1":
+        for n in nodes:
+            logger.info("RAG hit score=%.4f text=%s", n.score or 0.0, n.get_content()[:120].replace("\n", " "))
     if not filtered:
         return "Answer: Not sure\nExplanation: Not enough information in the context."
 
