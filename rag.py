@@ -45,6 +45,22 @@ def configure_llm() -> None:
             is_function_calling_model=False,
             timeout=180.0,
         )
+    elif llm_provider == "groq":
+        from llama_index.llms.openai_like import OpenAILike
+
+        groq_api_key = os.getenv("GROQ_API_KEY")
+        if not groq_api_key:
+            raise RuntimeError("Missing GROQ_API_KEY for Groq.")
+
+        groq_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+        Settings.llm = OpenAILike(
+            model=groq_model,
+            api_base="https://api.groq.com/openai/v1",
+            api_key=groq_api_key,
+            is_chat_model=True,
+            is_function_calling_model=False,
+            timeout=180.0,
+        )
     else:
         Settings.llm = Ollama(model="llama3.2", request_timeout=180.0)
 
@@ -65,5 +81,6 @@ def get_query_engine(persist_dir: str = "./storage", data_dir: str = "driving_da
         storage_context = StorageContext.from_defaults(persist_dir=persist_dir)
         index = load_index_from_storage(storage_context)
 
-    top_k = int(os.getenv("RAG_TOP_K", "4"))
-    return index.as_query_engine(similarity_top_k=top_k)
+    top_k = int(os.getenv("RAG_TOP_K", "2"))
+    response_mode = os.getenv("RAG_RESPONSE_MODE", "compact")
+    return index.as_query_engine(similarity_top_k=top_k, response_mode=response_mode)

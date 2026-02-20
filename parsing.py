@@ -12,12 +12,20 @@ load_dotenv()
 
 
 # ================== CONFIG ==================
-client = OpenAI(
-    api_key=os.getenv("XAI_API_KEY"),        # your xai-... key
-    base_url="https://api.x.ai/v1"
-)
+PARSE_PROVIDER = os.getenv("PARSE_PROVIDER", "xai").lower()
 
-MODEL = "grok-4"          # or "grok-2-vision-1212" if you want the dedicated vision model
+if PARSE_PROVIDER == "groq":
+    client = OpenAI(
+        api_key=os.getenv("GROQ_API_KEY"),
+        base_url="https://api.groq.com/openai/v1",
+    )
+    MODEL = os.getenv("PARSE_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+else:
+    client = OpenAI(
+        api_key=os.getenv("XAI_API_KEY"),        # your xai-... key
+        base_url="https://api.x.ai/v1"
+    )
+    MODEL = os.getenv("PARSE_MODEL", "grok-4")
 SCREENSHOTS_FOLDER = "Dl screenshots"   # put your phone screenshots here
 OUTPUT_FOLDER = "driving_data/parsed"
 
@@ -60,27 +68,47 @@ def parse_screenshot(image_path: str):
     t_encode = time.perf_counter() - t_encode_start
     
     t_api_start = time.perf_counter()
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": SYSTEM_PROMPT},
+    if PARSE_PROVIDER == "groq":
+        response = client.responses.create(
+            model=MODEL,
+            input=[
                 {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/jpeg;base64,{base64_image}",
-                        "detail": PARSE_DETAIL
-                    }
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": SYSTEM_PROMPT},
+                        {
+                            "type": "input_image",
+                            "image_url": f"data:image/jpeg;base64,{base64_image}",
+                            "detail": PARSE_DETAIL,
+                        },
+                    ],
                 }
-            ]
-        }],
-        max_tokens=1200,
-        temperature=0.0   # máximo precisión y consistencia
-    )
+            ],
+            max_output_tokens=1200,
+            temperature=0.0,
+        )
+        raw_text = (response.output_text or "").strip()
+    else:
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": SYSTEM_PROMPT},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{base64_image}",
+                            "detail": PARSE_DETAIL
+                        }
+                    }
+                ]
+            }],
+            max_tokens=1200,
+            temperature=0.0   # máximo precisión y consistencia
+        )
+        raw_text = response.choices[0].message.content.strip()
     t_api = time.perf_counter() - t_api_start
-    
-    raw_text = response.choices[0].message.content.strip()
     
     # Intentar extraer JSON (Grok suele devolverlo limpio)
     t_parse_start = time.perf_counter()
@@ -123,15 +151,11 @@ def parse_screenshot(image_path: str):
 
 # ================== RUN ON FOLDER ==================
 if __name__ == "__main__":
-    image_extensions = ["*.jpg", "*.jpeg", "*.png"]
-    all_images = []
-    for ext in image_extensions:
-        all_images.extend(Path(SCREENSHOTS_FOLDER).glob(ext))
-    
-    print(f"Found {len(all_images)} screenshots to process...\n")
-    
-    for img_path in sorted(all_images):
-        parse_screenshot(str(img_path))
-    
-    print("Done! All files are in driving_data/parsed/")
-    print("You can add them to your RAG index by running your LlamaIndex script again.")
+    import sys
+
+    if len(sys.argv) < 2:
+        print("Usage: python parsing.py /path/to/image.jpg")
+        raise SystemExit(1)
+
+    image_path = sys.argv[1]
+    parse_screenshot(image_path)

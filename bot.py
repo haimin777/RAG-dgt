@@ -13,6 +13,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, Messa
 from parsing import parse_screenshot
 from rag import get_query_engine
 
+ENABLE_RAG = os.getenv("ENABLE_RAG", "0") == "1"
 query_engine = None
 
 logging.basicConfig(level=logging.INFO)
@@ -99,11 +100,6 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await safe_reply(message, "Processing the screenshot. This can take a moment...")
 
     try:
-        global query_engine
-        if query_engine is None:
-            logger.info("Initializing RAG query engine")
-            query_engine = await asyncio.wait_for(asyncio.to_thread(get_query_engine), timeout=90)
-
         logger.info("Parsing screenshot")
         t_parse_start = time.perf_counter()
         data = await asyncio.wait_for(asyncio.to_thread(parse_screenshot, save_path), timeout=120)
@@ -116,29 +112,36 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 await safe_reply(message, parsed_text[i : i + max_len])
             return
 
-        await safe_reply(message, "Screenshot parsed successfully. Running RAG...")
+        await safe_reply(message, "Screenshot parsed successfully.")
 
-        question = data.get("question", "").strip()
-        options = data.get("options", [])
+        output_text = f"{parsed_text}\n\nTiming: parse={t_parse:.2f}s"
 
-        prompt_lines = [
-            "Analyze the driver's theory test question (Spanish Permiso B / DGT).",
-            "Select the correct option and briefly explain why.",
-            "",
-            f"Question: {question}",
-        ]
-        if options:
-            prompt_lines.append("")
-            prompt_lines.extend(options)
-        # Intentionally omit app explanation to keep the prompt short and faster.
+        if ENABLE_RAG:
+            await safe_reply(message, "Running RAG...")
+            global query_engine
+            if query_engine is None:
+                logger.info("Initializing RAG query engine")
+                query_engine = await asyncio.wait_for(asyncio.to_thread(get_query_engine), timeout=90)
 
-        query = "\n".join(prompt_lines).strip()
-        logger.info("Querying RAG")
-        t_rag_start = time.perf_counter()
-        response = await asyncio.wait_for(asyncio.to_thread(query_engine.query, query), timeout=120)
-        t_rag = time.perf_counter() - t_rag_start
+            question = data.get("question", "").strip()
+            options = data.get("options", [])
 
-        output_text = f"{parsed_text}\n\n---\n\nRAG Answer:\n{response}\n\nTiming: parse={t_parse:.2f}s rag={t_rag:.2f}s"
+            prompt_lines = [
+                "Analyze the driver's theory test question (Spanish Permiso B / DGT).",
+                "Select the correct option and briefly explain why.",
+                "",
+                f"Question: {question}",
+            ]
+            if options:
+                prompt_lines.append("")
+                prompt_lines.extend(options)
+
+            query = "\n".join(prompt_lines).strip()
+            logger.info("Querying RAG")
+            t_rag_start = time.perf_counter()
+            response = await asyncio.wait_for(asyncio.to_thread(query_engine.query, query), timeout=120)
+            t_rag = time.perf_counter() - t_rag_start
+            output_text += f"\n\n---\n\nRAG Answer:\n{response}\n\nTiming: rag={t_rag:.2f}s"
 
         max_len = 3500
         for i in range(0, len(output_text), max_len):
