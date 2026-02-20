@@ -6,6 +6,7 @@ from llama_index.core import (
     StorageContext,
     VectorStoreIndex,
     load_index_from_storage,
+    PromptTemplate,
 )
 from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.llms.ollama import Ollama
@@ -65,7 +66,11 @@ def configure_llm() -> None:
         Settings.llm = Ollama(model="llama3.2", request_timeout=180.0)
 
 
-def get_query_engine(persist_dir: str = "./storage", data_dir: str = "driving_data"):
+_index = None
+_retriever = None
+
+
+def _load_index(persist_dir: str = "./storage", data_dir: str = "driving_data"):
     configure_llm()
     prebuilt_only = os.getenv("PREBUILT_INDEX", "1") == "1"
     if not os.path.exists(persist_dir):
@@ -80,7 +85,42 @@ def get_query_engine(persist_dir: str = "./storage", data_dir: str = "driving_da
     else:
         storage_context = StorageContext.from_defaults(persist_dir=persist_dir)
         index = load_index_from_storage(storage_context)
+    return index
 
-    top_k = int(os.getenv("RAG_TOP_K", "2"))
-    response_mode = os.getenv("RAG_RESPONSE_MODE", "compact")
-    return index.as_query_engine(similarity_top_k=top_k, response_mode=response_mode)
+
+def _get_retriever(persist_dir: str = "./storage", data_dir: str = "driving_data"):
+    global _index, _retriever
+    if _retriever is None:
+        if _index is None:
+            _index = _load_index(persist_dir=persist_dir, data_dir=data_dir)
+        top_k = int(os.getenv("RAG_TOP_K", "1"))
+        _retriever = _index.as_retriever(similarity_top_k=top_k)
+    return _retriever
+
+
+def answer_query(query: str, persist_dir: str = "./storage", data_dir: str = "driving_data") -> str:
+    retriever = _get_retriever(persist_dir=persist_dir, data_dir=data_dir)
+    nodes = retriever.retrieve(query)
+
+    min_score = float(os.getenv("RAG_MIN_SCORE", "0.3"))
+    filtered = [n for n in nodes if (n.score is None or n.score >= min_score)]
+    if not filtered:
+        return "Answer: Not sure\nExplanation: Not enough information in the context."
+
+    context = "\n\n".join([n.get_content() for n in filtered])
+    qa_template = PromptTemplate(
+        "You are a driving theory exam tutor. Use ONLY the context to answer.\n"
+        "Return exactly two lines:\n"
+        "Answer: <option letter> - <option text>\n"
+        "Explanation: <one or two sentences>\n"
+        "If the answer is not in the context, write:\n"
+        "Answer: Not sure\n"
+        "Explanation: Not enough information in the context.\n"
+        "Do NOT list unrelated questions or dump the context.\n\n"
+        "Context:\n{context_str}\n\n"
+        "Question:\n{query_str}\n\n"
+        "Answer:"
+    )
+    prompt = qa_template.format(context_str=context, query_str=query)
+    resp = Settings.llm.complete(prompt)
+    return resp.text.strip()

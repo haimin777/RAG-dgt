@@ -4,3 +4,4 @@ venv
 __pycache__/
 driving_data/
 screenshots/
+*sqlite3

@@ -6,12 +6,14 @@ from dotenv import load_dotenv
 import asyncio
 import logging
 import time
+import sqlite3
+from datetime import datetime, timezone
 from telegram import Update
 from telegram.error import RetryAfter
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 
 from parsing import parse_screenshot
-from rag import get_query_engine
+from rag import answer_query
 
 ENABLE_RAG = os.getenv("ENABLE_RAG", "0") == "1"
 query_engine = None
@@ -32,6 +34,8 @@ WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/webhook").strip() or "/webhook"
 PORT = int(os.getenv("PORT", "8080"))
 SCREENSHOTS_DIR = os.getenv("SCREENSHOTS_DIR", "./screenshots")
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
+LIMIT_PER_DAY = int(os.getenv("LIMIT_PER_DAY", "10"))
+LIMIT_STORE = os.getenv("LIMIT_STORE", "./user_limits.sqlite3")
 
 
 def format_result(data: dict) -> str:
@@ -56,7 +60,7 @@ def format_result(data: dict) -> str:
     explanation = (data.get("explanation") or "").strip()
     if explanation:
         lines.append("")
-        lines.append("Explanation:")
+        lines.append("Explanation from LLM:")
         lines.append(explanation)
 
     sign_description = (data.get("sign_description") or "").strip()
@@ -81,6 +85,17 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not message:
         return
     logger.info("Received image update_id=%s chat_id=%s", update.update_id, message.chat_id)
+
+    user_id = message.from_user.id if message.from_user else None
+    if user_id is not None:
+        allowed, remaining = check_and_increment_limit(user_id)
+        if not allowed:
+            await safe_reply(
+                message,
+                f"Daily limit reached ({LIMIT_PER_DAY} requests). Try again tomorrow.",
+            )
+            return
+        await safe_reply(message, f"Request accepted. Remaining today: {remaining}")
 
     tg_file = None
     if message.photo:
@@ -118,11 +133,6 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         if ENABLE_RAG:
             await safe_reply(message, "Running RAG...")
-            global query_engine
-            if query_engine is None:
-                logger.info("Initializing RAG query engine")
-                query_engine = await asyncio.wait_for(asyncio.to_thread(get_query_engine), timeout=90)
-
             question = data.get("question", "").strip()
             options = data.get("options", [])
 
@@ -139,9 +149,9 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             query = "\n".join(prompt_lines).strip()
             logger.info("Querying RAG")
             t_rag_start = time.perf_counter()
-            response = await asyncio.wait_for(asyncio.to_thread(query_engine.query, query), timeout=120)
+            response = await asyncio.wait_for(asyncio.to_thread(answer_query, query), timeout=120)
             t_rag = time.perf_counter() - t_rag_start
-            output_text += f"\n\n---\n\nRAG Answer:\n{response}\n\nTiming: rag={t_rag:.2f}s"
+            output_text += f"\n\n---\n\nAnswer LLM+DGT docs:\n{response}\n\nTiming: rag={t_rag:.2f}s"
 
         max_len = 3500
         for i in range(0, len(output_text), max_len):
@@ -170,6 +180,41 @@ async def safe_reply(message, text: str, retries: int = 3) -> None:
             await asyncio.sleep(1)
     # last try without swallowing exceptions
     await message.reply_text(text)
+
+
+def check_and_increment_limit(user_id: int) -> tuple[bool, int]:
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    conn = sqlite3.connect(LIMIT_STORE)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS user_limits (user_id INTEGER PRIMARY KEY, date TEXT, count INTEGER)"
+        )
+        row = conn.execute(
+            "SELECT date, count FROM user_limits WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+
+        if row is None or row[0] != today:
+            count = 0
+        else:
+            count = row[1]
+
+        if count >= LIMIT_PER_DAY:
+            conn.commit()
+            return False, 0
+
+        count += 1
+        conn.execute(
+            "INSERT INTO user_limits (user_id, date, count) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET date=excluded.date, count=excluded.count",
+            (user_id, today, count),
+        )
+        conn.commit()
+
+        remaining = max(LIMIT_PER_DAY - count, 0)
+        return True, remaining
+    finally:
+        conn.close()
 
 
 def main() -> None:

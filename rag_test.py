@@ -3,7 +3,7 @@ import json
 import time
 from pathlib import Path
 
-from rag import get_query_engine
+from rag import answer_query
 
 
 def build_query(data: dict) -> str:
@@ -30,16 +30,12 @@ def main() -> None:
     data = json.loads(Path(args.json_file).read_text(encoding="utf-8"))
     query = build_query(data)
 
-    t_init_start = time.perf_counter()
-    engine = get_query_engine()
-    t_init = time.perf_counter() - t_init_start
-
     t_rag_start = time.perf_counter()
-    response = engine.query(query)
+    response = answer_query(query)
     t_rag = time.perf_counter() - t_rag_start
 
     print(response)
-    print(f"\nTiming: init={t_init:.2f}s rag={t_rag:.2f}s")
+    print(f"\nTiming: rag={t_rag:.2f}s")
 
 
 if __name__ == "__main__":
