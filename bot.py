@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from telegram import Update
 from telegram.error import RetryAfter
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import PreCheckoutQueryHandler
+from telegram import LabeledPrice
 
 from parsing import parse_screenshot
 from rag import answer_query
@@ -36,6 +38,8 @@ SCREENSHOTS_DIR = os.getenv("SCREENSHOTS_DIR", "./screenshots")
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 LIMIT_PER_DAY = int(os.getenv("LIMIT_PER_DAY", "10"))
 LIMIT_STORE = os.getenv("LIMIT_STORE", "./user_limits.sqlite3")
+RESET_PRICE_STARS = int(os.getenv("RESET_PRICE_STARS", "10"))
+RESET_INCREMENT = int(os.getenv("RESET_INCREMENT", str(LIMIT_PER_DAY)))
 
 
 def format_result(data: dict) -> str:
@@ -78,6 +82,34 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Send me a screenshot (photo or file) and I will extract the question and options."
     )
+    await update.message.reply_text(
+        f"Daily limit: {LIMIT_PER_DAY}. To reset (+{RESET_INCREMENT}) for {RESET_PRICE_STARS} Stars, use /reset."
+    )
+
+
+async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.message
+    if not message:
+        return
+
+    title = "Daily Limit Reset"
+    description = f"Add +{RESET_INCREMENT} requests for today."
+    payload = f"reset:{message.from_user.id}:{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
+    prices = [LabeledPrice("Limit reset", RESET_PRICE_STARS)]
+
+    await message.reply_invoice(
+        title=title,
+        description=description,
+        payload=payload,
+        provider_token="",
+        currency="XTR",
+        prices=prices,
+        need_email=False,
+        need_name=False,
+        need_phone_number=False,
+        need_shipping_address=False,
+        is_flexible=False,
+    )
 
 
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -92,7 +124,8 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if not allowed:
             await safe_reply(
                 message,
-                f"Daily limit reached ({LIMIT_PER_DAY} requests). Try again tomorrow.",
+                f"Daily limit reached ({LIMIT_PER_DAY} requests). "
+                f"Reset for {RESET_PRICE_STARS} Stars with /reset.",
             )
             return
         await safe_reply(message, f"Request accepted. Remaining today: {remaining}")
@@ -182,45 +215,127 @@ async def safe_reply(message, text: str, retries: int = 3) -> None:
     await message.reply_text(text)
 
 
+async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.pre_checkout_query
+    if not query:
+        return
+    await query.answer(ok=True)
+
+
+async def successful_payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.message
+    if not message or not message.successful_payment:
+        return
+
+    payment = message.successful_payment
+    if payment.currency != "XTR" or payment.total_amount != RESET_PRICE_STARS:
+        await safe_reply(message, "Payment received, but amount/currency mismatch.")
+        return
+
+    payload = payment.invoice_payload or ""
+    if not payload.startswith("reset:"):
+        await safe_reply(message, "Payment received, but payload is invalid.")
+        return
+
+    parts = payload.split(":")
+    if len(parts) < 3:
+        await safe_reply(message, "Payment received, but payload is invalid.")
+        return
+
+    user_id = int(parts[1])
+    increment_bonus(user_id, RESET_INCREMENT)
+    await safe_reply(message, f"Limit reset applied. You received +{RESET_INCREMENT} requests for today.")
+
+
 def check_and_increment_limit(user_id: int) -> tuple[bool, int]:
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     conn = sqlite3.connect(LIMIT_STORE)
     try:
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS user_limits (user_id INTEGER PRIMARY KEY, date TEXT, count INTEGER)"
+            "CREATE TABLE IF NOT EXISTS user_limits (user_id INTEGER PRIMARY KEY, date TEXT, count INTEGER, bonus INTEGER DEFAULT 0)"
         )
+        # Ensure bonus column exists for older DBs
+        conn.execute(
+            "ALTER TABLE user_limits ADD COLUMN bonus INTEGER DEFAULT 0"
+        )
+    except sqlite3.OperationalError:
+        # Column already exists
+        pass
+    try:
         row = conn.execute(
-            "SELECT date, count FROM user_limits WHERE user_id = ?",
+            "SELECT date, count, bonus FROM user_limits WHERE user_id = ?",
             (user_id,),
         ).fetchone()
 
         if row is None or row[0] != today:
             count = 0
+            bonus = 0
         else:
             count = row[1]
+            bonus = row[2] or 0
 
-        if count >= LIMIT_PER_DAY:
+        limit = LIMIT_PER_DAY + bonus
+
+        if count >= limit:
             conn.commit()
             return False, 0
 
         count += 1
         conn.execute(
-            "INSERT INTO user_limits (user_id, date, count) VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id) DO UPDATE SET date=excluded.date, count=excluded.count",
-            (user_id, today, count),
+            "INSERT INTO user_limits (user_id, date, count, bonus) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET date=excluded.date, count=excluded.count, bonus=excluded.bonus",
+            (user_id, today, count, bonus),
         )
         conn.commit()
 
-        remaining = max(LIMIT_PER_DAY - count, 0)
+        remaining = max(limit - count, 0)
         return True, remaining
     finally:
         conn.close()
 
 
+def increment_bonus(user_id: int, amount: int) -> None:
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    conn = sqlite3.connect(LIMIT_STORE)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS user_limits (user_id INTEGER PRIMARY KEY, date TEXT, count INTEGER, bonus INTEGER DEFAULT 0)"
+        )
+        conn.execute(
+            "ALTER TABLE user_limits ADD COLUMN bonus INTEGER DEFAULT 0"
+        )
+    except sqlite3.OperationalError:
+        pass
+
+    row = conn.execute(
+        "SELECT date, count, bonus FROM user_limits WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
+
+    if row is None or row[0] != today:
+        count = 0
+        bonus = 0
+    else:
+        count = row[1]
+        bonus = row[2] or 0
+
+    bonus += amount
+    conn.execute(
+        "INSERT INTO user_limits (user_id, date, count, bonus) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(user_id) DO UPDATE SET date=excluded.date, count=excluded.count, bonus=excluded.bonus",
+        (user_id, today, count, bonus),
+    )
+    conn.commit()
+    conn.close()
+
+
 def main() -> None:
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("reset", reset))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
+    app.add_handler(PreCheckoutQueryHandler(precheckout_handler))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
     app.add_error_handler(error_handler)
 
     if BOT_MODE == "webhook":
