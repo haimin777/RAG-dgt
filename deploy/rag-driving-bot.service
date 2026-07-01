@@ -1,0 +1,17 @@
+[Unit]
+Description=RAG driving license Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=botuser
+Group=botuser
+WorkingDirectory=/opt/rag-driving-license
+EnvironmentFile=/opt/rag-driving-license/.env
+ExecStart=/opt/rag-driving-license/venv/bin/python /opt/rag-driving-license/bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

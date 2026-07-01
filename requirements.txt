@@ -4,4 +4,6 @@ llama-index
 llama-index-llms-ollama
 llama-index-llms-openai-like
 llama-index-embeddings-openai
-
+openai
+Pillow
+pypdf
